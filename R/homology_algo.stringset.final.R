@@ -1,4 +1,3 @@
-
 #' Find Homologous Regions in a Sequence
 #'
 #' This function identifies the extent of homology around a given deletion region within a sequence.
@@ -97,7 +96,7 @@ find_homology.list <- function(seq, position, deletion, debug = F, left = T, rig
 #'   \item{left (5' retained vs. 3' deleted):}{The function compares positions moving left from a reference point until a predefined deletion length is reached, updating a match-score based on a threshold ratio.}
 #'   \item{right (5' deleted vs. 3' retained):}{Similarly, the function compares positions moving right from the reference point, maintaining a match score and a count until the deletion length requirement is fulfilled.}
 #' }
-#'
+
 #' @param seq A vector of sequences or a single sequence. The function supports both \code{DNAString} objects (from the Biostrings package) and character strings, adapting internal processing accordingly.
 #' @param position A numeric vector indicating the reference position(s) in the sequence(s) around which the sub-sequence comparisons are performed.
 #' @param deletion A numeric vector specifying the deletion window length for each sequence. This value controls how many positions will be compared.
@@ -119,81 +118,273 @@ find_homology.list <- function(seq, position, deletion, debug = F, left = T, rig
 #'
 #' @examples
 #' \dontrun{
-#'   library(Biostrings)
-#'   # For DNAString input:
-#'   seq <- DNAString("ACGTACGT")
-#'   pos <- 4
-#'   del <- 3
-#'   # Compute homeology indices with debugging enabled.
-#'   result <- find_homeology.list(seq, pos, del, debug = TRUE)
+#' library(Biostrings)
+#' # For DNAString input:
+#' seq <- DNAString("ACGTACGT")
+#' pos <- 4
+#' del <- 3
+#' # Compute homeology indices with debugging enabled.
+#' result <- find_homeology.list(seq, pos, del, debug = TRUE)
 #' }
 #'
 #' @export
 find_homeology.list <- function(seq, position, deletion, debug = F, thresh = 0.8, left = T, right = T) {
-  if(grepl("DNAString", class(seq))) {
+  if (grepl("DNAString", class(seq))) {
     sub.fn <- Biostrings::subseq
     str.split.fn <- base::strsplit
     str.reverse <- Biostrings::reverse
-    x.s<- x.t<- y.s<- y.t <- DNAString()
+    x.s <- x.t <- y.s <- y.t <- DNAString()
     paste.fn <- xscat
   } else {
     sub.fn <- base::substr
     str.split.fn <- base::strsplit
     str.reverse <- stringi::stri_reverse
-    x.s<- x.t<- y.s<- y.t <- ""
+    x.s <- x.t <- y.s <- y.t <- ""
     paste.fn <- paste0
-  }  
-  tbl <- data.table(count.x = rep(1, length(seq)),
-                    max.x = rep(0, length(seq)),
-                    match.x = rep(0, length(seq)),
-                    max.y = rep(0, length(seq)),
-                    match.y = rep(0, length(seq)),
-                    count.y = rep(1, length(seq)))
-  
-  if(left){
-    if(debug) print("5' retained sequence vs 3' deleted sequence")
-    while(any(tbl$count.x < deletion)){
+  }
+  tbl <- data.table(
+    count.x = rep(1, length(seq)),
+    max.x = rep(0, length(seq)),
+    match.x = rep(0, length(seq)),
+    max.y = rep(0, length(seq)),
+    match.y = rep(0, length(seq)),
+    count.y = rep(1, length(seq))
+  )
+
+  if (left) {
+    if (debug) print("5' retained sequence vs 3' deleted sequence")
+    while (any(tbl$count.x < deletion)) {
       i1 <- which(tbl$count.x < deletion)
       print(length(i1))
       e1 <- (position[i1] - tbl$count.x[i1])
       e2 <- (position[i1] + deletion[i1] - tbl$count.x[i1])
       s1 = sub.fn(seq[i1], e1, e1)
       s2 = sub.fn(seq[i1], e2, e2)
-      if(debug) print(paste.fn(s1, s2))
-      tbl[i1, match.x := match.x + mapply(function(x,y) sum(x==y),
-                                          str.split.fn(as.character(s1),""),
-                                          str.split.fn(as.character(s2),"")) ]
-      if(any(tbl[i1]$match.x / tbl[i1]$count.x >= thresh & s1 == s2)){
-        i2 <- which(tbl[i1]$match.x / tbl[i1]$count.x  >= thresh & s1 == s2)
+      if (debug) print(paste.fn(s1, s2))
+      tbl[i1, match.x := match.x + mapply(
+        function(x, y) sum(x == y),
+        str.split.fn(as.character(s1), ""),
+        str.split.fn(as.character(s2), "")
+      )]
+      if (any(tbl[i1]$match.x / tbl[i1]$count.x >= thresh & s1 == s2)) {
+        i2 <- which(tbl[i1]$match.x / tbl[i1]$count.x >= thresh & s1 == s2)
         tbl[i2, max.x := count.x]
       }
       tbl[count.x < deletion, count.x := count.x + 1]
-      x.s <- paste.fn(s1, x.s); x.t <- paste.fn(s2, x.t)
+      x.s <- paste.fn(s1, x.s)
+      x.t <- paste.fn(s2, x.t)
     }
   }
-  if(right) {
-    if(debug) print("5' deleted sequence vs 3' retained sequence")
-    while(any(tbl$count.y < deletion)){
+  if (right) {
+    if (debug) print("5' deleted sequence vs 3' retained sequence")
+    while (any(tbl$count.y < deletion)) {
       i1 <- which(tbl$count.y < deletion)
       print(length(i1))
       e1 <- position[i1] + tbl$count.y[i1] - 1
       e2 <- position[i1] + tbl$count.y[i1] + deletion[i1] - 1
       s1 = sub.fn(seq[i1], e1, e1)
       s2 = sub.fn(seq[i1], e2, e2)
-      if(debug) print(paste0(s1, s2))
-      tbl[i1, match.y := match.y + mapply(function(x,y) sum(x==y),
-                                          str.split.fn(as.character(s1),""),
-                                          str.split.fn(as.character(s2),""))]
-      if(any(tbl[i1]$match.y / tbl[i1]$count.y >= thresh & s1 == s2)){
+      if (debug) print(paste0(s1, s2))
+      tbl[i1, match.y := match.y + mapply(
+        function(x, y) sum(x == y),
+        str.split.fn(as.character(s1), ""),
+        str.split.fn(as.character(s2), "")
+      )]
+      if (any(tbl[i1]$match.y / tbl[i1]$count.y >= thresh & s1 == s2)) {
         i2 <- which(tbl[i1]$match.y / tbl[i1]$count.y >= thresh & s1 == s2)
         tbl[i2, max.y := count.y]
       }
       tbl[count.y < deletion, count.y := count.y + 1]
-      y.s <- paste.fn(y.s, s1); y.t <- paste.fn(y.t, s2)
+      y.s <- paste.fn(y.s, s1)
+      y.t <- paste.fn(y.t, s2)
     }
   }
-  if(debug) print(paste0(tbl$max.x, " vs. ", tbl$max.y))
-  if(left && !right) return(tbl$max.x)
-  else if(!left && right) return(tbl$max.y)
+  if (debug) print(paste0(tbl$max.x, " vs. ", tbl$max.y))
+  if (left && !right) {
+    return(tbl$max.x)
+  } else if (!left && right) {
+    return(tbl$max.y)
+  }
   return(c(tbl$max.x, tbl$max.y))
+}
+
+find_homology.gr <- function(gr, genome, debug = FALSE, left = TRUE, right = TRUE,
+                 mc.cores = 1, junction = FALSE) {
+  chrom_lengths <- width(genome)
+  names(chrom_lengths) <- names(genome)
+  
+  results <- pbmcapply::pbmclapply(seq_along(gr), function(i) {
+  left_match_i <- 0
+  right_match_i <- 0
+
+
+  if (debug)
+    message("Processing ", chrom, ":", st, "-", en, " (deletion size = ", n_del, ")")
+
+  if (left) {
+    if (st <= n_del) {
+    stop("Insufficient left context on ", chrom, " at position ", st, " for deletion of size ", n_del)
+    }
+    j <- 1
+    repeat {
+    pos_left <- st - j
+    pos_del  <- en - j + 1
+    if (pos_left < 1) break
+
+    base_left <- as.character(unlist(genome[GRanges(seqnames = chrom,
+                            ranges = IRanges(start = pos_left, end = pos_left))]))
+    base_del  <- as.character(unlist(genome[GRanges(seqnames = chrom,
+                             ranges = IRanges(start = pos_del, end = pos_del))]))
+    if (debug)
+      message("  Left j=", j, ": pos_left=", pos_left, " (", base_left, 
+          ") vs. pos_del=", pos_del, " (", base_del, ")")
+
+    if (base_left == base_del) {
+      left_match_i <- left_match_i + 1
+      j <- j + 1
+      if (j > n_del) break
+    } else {
+      break
+    }
+    }
+  }
+
+  if (right) {
+    if ((en + n_del) > as.numeric(chrom_lengths[chrom])) {
+    stop("Insufficient right context on ", chrom, " at position ", en, 
+       " for deletion of size ", n_del)
+    }
+    j <- 0
+    repeat {
+    pos_right <- st + j
+    pos_adj   <- en + 1 + j
+    if (pos_adj > as.numeric(chrom_lengths[chrom])) break
+
+    base_right <- as.character(unlist(genome[GRanges(seqnames = chrom, 
+                             ranges = IRanges(start = pos_right, end = pos_right))]))
+    base_adj   <- as.character(unlist(genome[GRanges(seqnames = chrom, 
+                             ranges = IRanges(start = pos_adj, end = pos_adj))]))
+    if (debug)
+      message("  Right j=", j, ": pos_right=", pos_right, " (", base_right, 
+          ") vs. pos_adj=", pos_adj, " (", base_adj, ")")
+
+    if (base_right == base_adj) {
+      right_match_i <- right_match_i + 1
+      j <- j + 1
+      if (j >= n_del) break
+    } else {
+      break
+    }
+    }
+  }
+
+  list(left = left_match_i, right = right_match_i)
+  }, mc.cores = mc.cores)
+
+  left_match <- sapply(results, function(x) x$left)
+  right_match <- sapply(results, function(x) x$right)
+
+  if (left && right)
+  return(list(left = left_match, right = right_match))
+  else if (left)
+  return(left_match)
+  else if (right)
+  return(right_match)
+}
+
+find_homeology.gr <- function(gr, genome, debug = FALSE, thresh = 0.8, left = TRUE, right = TRUE) {
+  # gr: GRanges object representing one or more deletion regions.
+  # genome: a BSgenome object (or similar) used for sequence look-up.
+  # thresh: threshold ratio of matches/count to record homology extension (default 0.8).
+  
+  # Retrieve chromosome lengths from genome
+  chrom_lengths <- seqlengths(genome)
+  
+  results <- lapply(seq_along(gr), function(i) {
+    del <- gr[i]
+    chrom <- as.character(seqnames(del))
+    st <- start(del)
+    en <- end(del)
+    n_del <- width(del)
+    
+    if(debug)
+      message("Processing ", chrom, ":", st, "-", en, " (deletion size = ", n_del, ")")
+    
+    left_match <- 0
+    right_match <- 0
+    
+    # === LEFT HOMEOLOGY SEARCH ===
+    if(left) {
+      # Initialize counters: we start with count = 1 (first base comparison)
+      j <- 1
+      match_x <- 0
+      count_x <- 0
+      max_x <- 0
+      while(j <= n_del && (st - j) >= 1) {
+        pos_left <- st - j            # base in retained left flank
+        pos_del  <- en - j + 1         # corresponding base in deletion region
+        # Fetch bases using getSeq():
+        base_left <- as.character(getSeq(genome, GRanges(seqnames = chrom,
+                                                         ranges = IRanges(start = pos_left, end = pos_left))))
+        base_del  <- as.character(getSeq(genome, GRanges(seqnames = chrom,
+                                                         ranges = IRanges(start = pos_del, end = pos_del))))
+        count_x <- count_x + 1
+        if(base_left == base_del) {
+          match_x <- match_x + 1
+        }
+        if(match_x/count_x >= thresh && base_left == base_del) {
+          max_x <- j
+        } else {
+          break
+        }
+        if(debug)
+          message("  Left j=", j, ": pos_left=", pos_left, " (", base_left,
+                  ") vs. pos_del=", pos_del, " (", base_del, ") => ratio: ", round(match_x/count_x,3))
+        j <- j + 1
+      }
+      left_match <- max_x
+    }
+    
+    # === RIGHT HOMEOLOGY SEARCH ===
+    if(right) {
+      j <- 0  # here we start at 0 so that at j = 0 we compare the very first bases
+      match_y <- 0
+      count_y <- 0
+      max_y <- 0
+      while(j < n_del && (en + 1 + j) <= as.numeric(chrom_lengths[chrom])) {
+        pos_right <- st + j            # retained base in right flank
+        pos_adj   <- en + 1 + j          # corresponding base after deletion
+        base_right <- as.character(getSeq(genome, GRanges(seqnames = chrom,
+                                                          ranges = IRanges(start = pos_right, end = pos_right))))
+        base_adj   <- as.character(getSeq(genome, GRanges(seqnames = chrom,
+                                                          ranges = IRanges(start = pos_adj, end = pos_adj))))
+        count_y <- count_y + 1
+        if(base_right == base_adj) {
+          match_y <- match_y + 1
+        }
+        if(match_y/count_y >= thresh && base_right == base_adj) {
+          max_y <- j + 1  # j starts at 0 so add 1 for actual count
+        } else {
+          break
+        }
+        if(debug)
+          message("  Right j=", j, ": pos_right=", pos_right, " (", base_right,
+                  ") vs. pos_adj=", pos_adj, " (", base_adj, ") => ratio: ", round(match_y/count_y,3))
+        j <- j + 1
+      }
+      right_match <- max_y
+    }
+    
+    list(left = left_match, right = right_match)
+  })
+  
+  left_vec <- sapply(results, function(x) x$left)
+  right_vec <- sapply(results, function(x) x$right)
+  
+  if(left && right)
+    return(list(left = left_vec, right = right_vec))
+  else if(left)
+    return(left_vec)
+  else
+    return(right_vec)
 }
