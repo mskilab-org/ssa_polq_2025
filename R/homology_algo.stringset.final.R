@@ -210,181 +210,261 @@ find_homeology.list <- function(seq, position, deletion, debug = F, thresh = 0.8
 
 find_homology.gr <- function(gr, genome, debug = FALSE, left = TRUE, right = TRUE,
                  mc.cores = 1, junction = FALSE) {
+
   chrom_lengths <- width(genome)
   names(chrom_lengths) <- names(genome)
   
-  results <- pbmcapply::pbmclapply(seq_along(gr), function(i) {
-  left_match_i <- 0
-  right_match_i <- 0
-
-
-  if (debug)
-    message("Processing ", chrom, ":", st, "-", en, " (deletion size = ", n_del, ")")
-
-  if (left) {
-    if (st <= n_del) {
-    stop("Insufficient left context on ", chrom, " at position ", st, " for deletion of size ", n_del)
-    }
-    j <- 1
-    repeat {
-    pos_left <- st - j
-    pos_del  <- en - j + 1
-    if (pos_left < 1) break
-
-    base_left <- as.character(unlist(genome[GRanges(seqnames = chrom,
-                            ranges = IRanges(start = pos_left, end = pos_left))]))
-    base_del  <- as.character(unlist(genome[GRanges(seqnames = chrom,
-                             ranges = IRanges(start = pos_del, end = pos_del))]))
-    if (debug)
-      message("  Left j=", j, ": pos_left=", pos_left, " (", base_left, 
-          ") vs. pos_del=", pos_del, " (", base_del, ")")
-
-    if (base_left == base_del) {
-      left_match_i <- left_match_i + 1
-      j <- j + 1
-      if (j > n_del) break
-    } else {
-      break
-    }
-    }
+  # Create a data.table with the needed columns extracted from 'gr'
+  dt <- data.table(
+  idx         = seq_along(gr),
+  chrom       = as.character(seqnames(gr)),
+  st          = start(gr),
+  en          = end(gr),
+  n_del       = width(gr),
+  left_match  = 0L,
+  right_match = 0L,
+  j_left      = 1L,   # left side iteration counter (starts at 1)
+  j_right     = 0L    # right side iteration counter (starts at 0)
+  )
+  
+  # Add chromosome lengths for each row (reuse the lookup from genome)
+  dt[, chrom_len := as.numeric(chrom_lengths[chrom])]
+  
+  # Ensure sufficient sequence context exists.
+  if (any(dt$st <= dt$n_del)) {
+  stop("Insufficient left context for some entries")
   }
-
-  if (right) {
-    if ((en + n_del) > as.numeric(chrom_lengths[chrom])) {
-    stop("Insufficient right context on ", chrom, " at position ", en, 
-       " for deletion of size ", n_del)
-    }
-    j <- 0
-    repeat {
-    pos_right <- st + j
-    pos_adj   <- en + 1 + j
-    if (pos_adj > as.numeric(chrom_lengths[chrom])) break
-
-    base_right <- as.character(unlist(genome[GRanges(seqnames = chrom, 
-                             ranges = IRanges(start = pos_right, end = pos_right))]))
-    base_adj   <- as.character(unlist(genome[GRanges(seqnames = chrom, 
-                             ranges = IRanges(start = pos_adj, end = pos_adj))]))
-    if (debug)
-      message("  Right j=", j, ": pos_right=", pos_right, " (", base_right, 
-          ") vs. pos_adj=", pos_adj, " (", base_adj, ")")
-
-    if (base_right == base_adj) {
-      right_match_i <- right_match_i + 1
-      j <- j + 1
-      if (j >= n_del) break
-    } else {
-      break
-    }
-    }
+  if (any(dt$en + dt$n_del > dt$chrom_len)) {
+  stop("Insufficient right context for some entries")
   }
-
-  list(left = left_match_i, right = right_match_i)
-  }, mc.cores = mc.cores)
-
-  left_match <- sapply(results, function(x) x$left)
-  right_match <- sapply(results, function(x) x$right)
-
+  
+  iter <- 1
+  # Iterate until no updates occur for either side.
+  repeat {
+  if (debug) {
+    message("Iteration ", iter)
+    message("Current state of dt:")
+    print(dt)
+  }
+  
+  # --- Left Side Update ---
+  left_idx <- dt[!is.na(j_left) & j_left <= n_del & ((st - j_left) >= 1), which = TRUE]
+  if (length(left_idx) > 0) {
+    # Compute positions for the retained left and the corresponding deleted bases.
+    pos_left <- dt[left_idx, st - j_left]
+    pos_del  <- dt[left_idx, en - j_left + 1]
+    
+    ranges_left <- GRanges(seqnames = dt[left_idx, chrom],
+               ranges   = IRanges(start = pos_left, end = pos_left))
+    ranges_del  <- GRanges(seqnames = dt[left_idx, chrom],
+               ranges   = IRanges(start = pos_del, end = pos_del))
+    
+    base_left <- as.character(getSeq(genome, ranges_left))
+    base_del  <- as.character(getSeq(genome, ranges_del))
+    
+    is_match <- base_left == base_del
+    
+    if (debug) {
+    message("Left update for indices: ", paste(left_idx, collapse = ", "))
+    message("  pos_left: ", paste(pos_left, collapse = ", "))
+    message("  pos_del : ", paste(pos_del, collapse = ", "))
+    message("  base_left: ", paste(base_left, collapse = ", "))
+    message("  base_del : ", paste(base_del, collapse = ", "))
+    message("  match result: ", paste(is_match, collapse = ", "))
+    }
+    
+    # For rows with matching bases, increment left_match and update j_left.
+    dt[left_idx, `:=`(
+    left_match = left_match + as.integer(is_match),
+    j_left = ifelse(is_match, j_left + 1L, NA_integer_)
+    )]
+  }
+  
+  # --- Right Side Update ---
+  right_idx <- dt[!is.na(j_right) & j_right < n_del & ((en + 1 + j_right) <= chrom_len), which = TRUE]
+  if (length(right_idx) > 0) {
+    # Compute positions for the retained right and the corresponding adjacent bases.
+    pos_right <- dt[right_idx, st + j_right]
+    pos_adj   <- dt[right_idx, en + 1 + j_right]
+    
+    ranges_right <- GRanges(seqnames = dt[right_idx, chrom],
+                ranges   = IRanges(start = pos_right, end = pos_right))
+    ranges_adj   <- GRanges(seqnames = dt[right_idx, chrom],
+                ranges   = IRanges(start = pos_adj, end = pos_adj))
+    
+    base_right <- as.character(getSeq(genome, ranges_right))
+    base_adj   <- as.character(getSeq(genome, ranges_adj))
+    
+    is_match <- base_right == base_adj
+    
+    if (debug) {
+    message("Right update for indices: ", paste(right_idx, collapse = ", "))
+    message("  pos_right: ", paste(pos_right, collapse = ", "))
+    message("  pos_adj  : ", paste(pos_adj, collapse = ", "))
+    message("  base_right: ", paste(base_right, collapse = ", "))
+    message("  base_adj  : ", paste(base_adj, collapse = ", "))
+    message("  match result: ", paste(is_match, collapse = ", "))
+    }
+    
+    dt[right_idx, `:=`(
+    right_match = right_match + as.integer(is_match),
+    j_right = ifelse(is_match, j_right + 1L, NA_integer_)
+    )]
+  }
+  
+  # If no rows were updated on either side, exit the loop.
+  if (length(left_idx) == 0 && length(right_idx) == 0) break
+  
+  iter <- iter + 1
+  }
+  
+  if (debug) {
+  message("Final state of dt:")
+  print(dt)
+  }
+  
+  # Assemble the return value depending on which directions are enabled.
   if (left && right)
-  return(list(left = left_match, right = right_match))
+  list(left = dt$left_match, right = dt$right_match)
   else if (left)
-  return(left_match)
-  else if (right)
-  return(right_match)
+  dt$left_match
+  else
+  dt$right_match
 }
 
 find_homeology.gr <- function(gr, genome, debug = FALSE, thresh = 0.8, left = TRUE, right = TRUE) {
-  # gr: GRanges object representing one or more deletion regions.
-  # genome: a BSgenome object (or similar) used for sequence look-up.
-  # thresh: threshold ratio of matches/count to record homology extension (default 0.8).
+  # Create a data.table that will hold per-entry tracking information.
+  dt <- data.table(
+    idx     = seq_along(gr),
+    chrom   = as.character(seqnames(gr)),
+    st      = start(gr),
+    n_del   = width(gr),
+    # Initialize counters for left (count.x) and right (count.y) sides.
+    count.x = rep(1L, length(gr)),
+    match.x = rep(0L, length(gr)),
+    max.x   = rep(0L, length(gr)),
+    count.y = rep(1L, length(gr)),
+    match.y = rep(0L, length(gr)),
+    max.y   = rep(0L, length(gr))
+  )
   
-  # Retrieve chromosome lengths from genome
+  # Fetch chromosome lengths from the genome.
   chrom_lengths <- seqlengths(genome)
+  dt[, chrom_len := as.numeric(chrom_lengths[chrom])]
   
-  results <- lapply(seq_along(gr), function(i) {
-    del <- gr[i]
-    chrom <- as.character(seqnames(del))
-    st <- start(del)
-    en <- end(del)
-    n_del <- width(del)
-    
-    if(debug)
-      message("Processing ", chrom, ":", st, "-", en, " (deletion size = ", n_del, ")")
-    
-    left_match <- 0
-    right_match <- 0
-    
-    # === LEFT HOMEOLOGY SEARCH ===
-    if(left) {
-      # Initialize counters: we start with count = 1 (first base comparison)
-      j <- 1
-      match_x <- 0
-      count_x <- 0
-      max_x <- 0
-      while(j <= n_del && (st - j) >= 1) {
-        pos_left <- st - j            # base in retained left flank
-        pos_del  <- en - j + 1         # corresponding base in deletion region
-        # Fetch bases using getSeq():
-        base_left <- as.character(getSeq(genome, GRanges(seqnames = chrom,
-                                                         ranges = IRanges(start = pos_left, end = pos_left))))
-        base_del  <- as.character(getSeq(genome, GRanges(seqnames = chrom,
-                                                         ranges = IRanges(start = pos_del, end = pos_del))))
-        count_x <- count_x + 1
-        if(base_left == base_del) {
-          match_x <- match_x + 1
-        }
-        if(match_x/count_x >= thresh && base_left == base_del) {
-          max_x <- j
-        } else {
-          break
-        }
-        if(debug)
-          message("  Left j=", j, ": pos_left=", pos_left, " (", base_left,
-                  ") vs. pos_del=", pos_del, " (", base_del, ") => ratio: ", round(match_x/count_x,3))
-        j <- j + 1
+  # Left side iteration:
+  # For left, the comparison is between positions:
+  #   pos1 = st - count.x
+  #   pos2 = st + n_del - count.x    [note: st + n_del equals (en + 1)]
+  if (left) {
+    while (any(i_left <- which(dt$count.x < dt$n_del & (dt$st - dt$count.x) >= 1))) {
+      # Compute positions for current left comparison.
+      e1 <- dt$st[i_left] - dt$count.x[i_left]
+      e2 <- dt$st[i_left] + dt$n_del[i_left] - dt$count.x[i_left]
+      
+      # Get the bases from the genome.
+      ranges1 <- GRanges(seqnames = dt$chrom[i_left],
+                         ranges = IRanges(start = e1, width = 1))
+      ranges2 <- GRanges(seqnames = dt$chrom[i_left],
+                         ranges = IRanges(start = e2, width = 1))
+      bases1 <- as.character(getSeq(genome, ranges1))
+      bases2 <- as.character(getSeq(genome, ranges2))
+      
+      # Update the match score.
+      m <- as.integer(bases1 == bases2)
+      dt[i_left, match.x := match.x + m]
+      
+      # Compute ratio after update.
+      ratio <- dt$match.x[i_left] / dt$count.x[i_left]
+      
+      if (debug) {
+        message("LEFT SIDE ITERATION:")
+        message("Indices: ", paste(i_left, collapse = ", "))
+        message("  count.x: ", paste(dt$count.x[i_left], collapse = ", "))
+        message("  Pos1 (st - count.x): ", paste(e1, collapse = ", "))
+        message("  Pos2 (st + n_del - count.x): ", paste(e2, collapse = ", "))
+        message("  Bases1: ", paste(bases1, collapse = ", "))
+        message("  Bases2: ", paste(bases2, collapse = ", "))
+        message("  Increment (m): ", paste(m, collapse = ", "))
+        message("  Total match.x after update: ", paste(dt$match.x[i_left], collapse = ", "))
+        message("  Ratio match/count: ", paste(round(ratio, 3), collapse = ", "))
       }
-      left_match <- max_x
-    }
-    
-    # === RIGHT HOMEOLOGY SEARCH ===
-    if(right) {
-      j <- 0  # here we start at 0 so that at j = 0 we compare the very first bases
-      match_y <- 0
-      count_y <- 0
-      max_y <- 0
-      while(j < n_del && (en + 1 + j) <= as.numeric(chrom_lengths[chrom])) {
-        pos_right <- st + j            # retained base in right flank
-        pos_adj   <- en + 1 + j          # corresponding base after deletion
-        base_right <- as.character(getSeq(genome, GRanges(seqnames = chrom,
-                                                          ranges = IRanges(start = pos_right, end = pos_right))))
-        base_adj   <- as.character(getSeq(genome, GRanges(seqnames = chrom,
-                                                          ranges = IRanges(start = pos_adj, end = pos_adj))))
-        count_y <- count_y + 1
-        if(base_right == base_adj) {
-          match_y <- match_y + 1
+      
+      # Check threshold ratio.
+      idx_valid <- which(ratio >= thresh & bases1 == bases2)
+      if (length(idx_valid) > 0) {
+        if (debug) {
+          message("  THRESHOLD met for indices: ", paste(i_left[idx_valid], collapse = ", "),
+                  " with ratio: ", paste(round(ratio[idx_valid], 3), collapse = ", "))
         }
-        if(match_y/count_y >= thresh && base_right == base_adj) {
-          max_y <- j + 1  # j starts at 0 so add 1 for actual count
-        } else {
-          break
-        }
-        if(debug)
-          message("  Right j=", j, ": pos_right=", pos_right, " (", base_right,
-                  ") vs. pos_adj=", pos_adj, " (", base_adj, ") => ratio: ", round(match_y/count_y,3))
-        j <- j + 1
+        # Save the current count as the best (maximum) extension for these indices.
+        dt[i_left[idx_valid], max.x := dt$count.x[i_left][idx_valid]]
       }
-      right_match <- max_y
+      
+      # Increment the left counter.
+      dt[i_left, count.x := count.x + 1L]
+      if (debug) message("  Incremented count.x for indices: ", paste(i_left, collapse = ", "))
     }
-    
-    list(left = left_match, right = right_match)
-  })
+  }
   
-  left_vec <- sapply(results, function(x) x$left)
-  right_vec <- sapply(results, function(x) x$right)
+  # Right side iteration:
+  # For right, we mimic the list logic by comparing positions:
+  #   pos1 = st + count.y - 1
+  #   pos2 = st + count.y + n_del - 1
+  if (right) {
+    while (any(i_right <- which(dt$count.y < dt$n_del & (dt$st + dt$count.y + dt$n_del - 1) <= dt$chrom_len))) {
+      e1 <- dt$st[i_right] + dt$count.y[i_right] - 1
+      e2 <- dt$st[i_right] + dt$count.y[i_right] + dt$n_del[i_right] - 1
+      
+      ranges1 <- GRanges(seqnames = dt$chrom[i_right],
+                         ranges = IRanges(start = e1, width = 1))
+      ranges2 <- GRanges(seqnames = dt$chrom[i_right],
+                         ranges = IRanges(start = e2, width = 1))
+      bases1 <- as.character(getSeq(genome, ranges1))
+      bases2 <- as.character(getSeq(genome, ranges2))
+      
+      m <- as.integer(bases1 == bases2)
+      dt[i_right, match.y := match.y + m]
+      
+      ratio <- dt$match.y[i_right] / dt$count.y[i_right]
+      
+      if (debug) {
+        message("RIGHT SIDE ITERATION:")
+        message("Indices: ", paste(i_right, collapse = ", "))
+        message("  count.y: ", paste(dt$count.y[i_right], collapse = ", "))
+        message("  Pos1 (st + count.y - 1): ", paste(e1, collapse = ", "))
+        message("  Pos2 (st + count.y + n_del - 1): ", paste(e2, collapse = ", "))
+        message("  Bases1: ", paste(bases1, collapse = ", "))
+        message("  Bases2: ", paste(bases2, collapse = ", "))
+        message("  Increment (m): ", paste(m, collapse = ", "))
+        message("  Total match.y after update: ", paste(dt$match.y[i_right], collapse = ", "))
+        message("  Ratio match/count: ", paste(round(ratio, 3), collapse = ", "))
+      }
+      
+      idx_valid <- which(ratio >= thresh & bases1 == bases2)
+      if (length(idx_valid) > 0) {
+        if (debug) {
+          message("  THRESHOLD met for indices: ", paste(i_right[idx_valid], collapse = ", "),
+                  " with ratio: ", paste(round(ratio[idx_valid], 3), collapse = ", "))
+        }
+        dt[i_right[idx_valid], max.y := dt$count.y[i_right][idx_valid]]
+      }
+      
+      dt[i_right, count.y := count.y + 1L]
+      if (debug) message("  Incremented count.y for indices: ", paste(i_right, collapse = ", "))
+    }
+  }
   
-  if(left && right)
-    return(list(left = left_vec, right = right_vec))
-  else if(left)
-    return(left_vec)
-  else
-    return(right_vec)
+  if (debug) {
+    message("Final state of data.table:")
+    print(dt)
+  }
+  
+  if (left && right) {
+    return(list(left = dt$max.x, right = dt$max.y))
+  } else if (left) {
+    return(dt$max.x)
+  } else {
+    return(dt$max.y)
+  }
 }
