@@ -332,7 +332,7 @@ find_homology.gr <- function(gr, genome, debug = FALSE, left = TRUE, right = TRU
   dt$right_match
 }
 
-find_homeology.gr <- function(gr, genome, debug = FALSE, thresh = 0.8, left = TRUE, right = TRUE) {
+find_homeology.gr <- function(gr, genome, verbose = FALSE, thresh = 0.8, left = TRUE, right = TRUE, debug = FALSE) {
   # Create a data.table that will hold per-entry tracking information.
   dt <- data.table(
     idx     = seq_along(gr),
@@ -357,7 +357,10 @@ find_homeology.gr <- function(gr, genome, debug = FALSE, thresh = 0.8, left = TR
   #   pos1 = st - count.x
   #   pos2 = st + n_del - count.x    [note: st + n_del equals (en + 1)]
   if (left) {
+    if (debug) message("Starting left side iterations")
     while (any(i_left <- which(dt$count.x < dt$n_del & (dt$st - dt$count.x) >= 1))) {
+      if (debug) message("Currently processing left indices: ", paste(i_left, collapse = ", "))
+      print(max(dt[, count.x]))
       # Compute positions for current left comparison.
       e1 <- dt$st[i_left] - dt$count.x[i_left]
       e2 <- dt$st[i_left] + dt$n_del[i_left] - dt$count.x[i_left]
@@ -403,7 +406,7 @@ find_homeology.gr <- function(gr, genome, debug = FALSE, thresh = 0.8, left = TR
       
       # Increment the left counter.
       dt[i_left, count.x := count.x + 1L]
-      if (debug) message("  Incremented count.x for indices: ", paste(i_left, collapse = ", "))
+      if (verbose) message("  Incremented count.x for indices: ", paste(i_left, collapse = ", "))
     }
   }
   
@@ -412,7 +415,10 @@ find_homeology.gr <- function(gr, genome, debug = FALSE, thresh = 0.8, left = TR
   #   pos1 = st + count.y - 1
   #   pos2 = st + count.y + n_del - 1
   if (right) {
+    if (debug) message("Starting right side iterations")
     while (any(i_right <- which(dt$count.y < dt$n_del & (dt$st + dt$count.y + dt$n_del - 1) <= dt$chrom_len))) {
+      print(max(dt[, count.y]))
+      if (debug) message("Currently processing right indices: ", paste(i_right, collapse = ", "))
       e1 <- dt$st[i_right] + dt$count.y[i_right] - 1
       e2 <- dt$st[i_right] + dt$count.y[i_right] + dt$n_del[i_right] - 1
       
@@ -451,8 +457,8 @@ find_homeology.gr <- function(gr, genome, debug = FALSE, thresh = 0.8, left = TR
       }
       
       dt[i_right, count.y := count.y + 1L]
-      if (debug) message("  Incremented count.y for indices: ", paste(i_right, collapse = ", "))
     }
+      if (verbose) message("  Incremented count.y for indices: ", paste(i_right, collapse = ", "))
   }
   
   if (debug) {
